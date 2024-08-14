@@ -1,0 +1,155 @@
+const timeZone = "Asia/Saigon";
+const dateTimeFormat = "dd/MM/yyyy HH:mm:ss";
+const attendanceLogSheetName = "attendance log";
+const defaultTerminalName = "headquarter";
+const mainTabName = "main tab";
+const passwordTabName = "password tab";
+
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu('Menu')
+    .addItem('Initial Setup', 'initialSetup')
+    .addItem('Add New UIDs', 'addNewUIDsFromAttendanceLogUiHandler')
+    .addItem('Add One Selected UID', 'addOneSelectedUID')
+    .addItem('Reset Data', 'resetData')
+    .addToUi();
+}
+
+function addOneSelectedUID() {
+  const sheet = SpreadsheetApp.getActiveSheet();
+  if (sheet.getName() !== attendanceLogSheetName) {
+    SpreadsheetApp.getUi().alert('It should be ' + attendanceLogSheetName + ' sheet');
+    return;
+  }
+  addNewUIDsFromAttendanceLog(sheet.getActiveCell().getRow());
+}
+
+function addNewUIDsFromAttendanceLogUiHandler() {
+  const ui = SpreadsheetApp.getUi();
+  const response = ui.alert('All new UIDs from ' + attendanceLogSheetName + ' will be added to the main tab', 'Are you sure?', ui.ButtonSet.YES_NO);
+  if (response === ui.Button.YES) addNewUIDsFromAttendanceLog();
+}
+
+function addNewUIDsFromAttendanceLog(row) {
+  const mainTab = getSheet(mainTabName);
+  const registeredUIDs = new Set(mainTab.getRange(2, 1, mainTab.getLastRow(), 1).getValues().flat());
+  const attendanceSheet = getSheet(attendanceLogSheetName);
+  const data = row ? attendanceSheet.getRange(row, 1, 1, 2).getValues() : attendanceSheet.getRange(2, 1, attendanceSheet.getLastRow() - 1, 2).getValues();
+  const newEntries = data.filter(entry => !registeredUIDs.has(entry[1]));
+
+  if (newEntries.length > 0) {
+    const startRow = mainTab.getLastRow() + 1;
+    const formattedEntries = newEntries.reverse().map((entry, index) => [
+      entry[1], 
+      'Person ' + (startRow + index - 1), 
+      'deny', 
+      "You're unregistered", 
+      0, 
+      entry[0]
+    ]);
+    mainTab.getRange(startRow, 1, formattedEntries.length, formattedEntries[0].length).setValues(formattedEntries);
+  }
+}
+
+function initialSetup() {
+  if (!getSheet(attendanceLogSheetName)) {
+    const mainSheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet().setName(mainTabName);
+    mainSheet.getRange(1, 1, 1, 6).setValues([['UID', 'Name', 'Access', 'Text To Display', 'Visits Count', 'Last Visit']]);
+    mainSheet.getRange(2, 1, 2, 6).setValues([
+      ['33668dfc', 'manager', 'allow', 'Come in!', 0, ''],
+      ['6a519389', 'staff', 'allow', 'Come in!', 0, '']
+    ]);
+    mainSheet.setColumnWidths(1, 6, 150);
+
+    const attendanceSheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet(attendanceLogSheetName);
+    attendanceSheet.getRange(1, 1, 1, 5).setValues([['Date Time', 'UID', 'Name', 'Result', 'Terminal']]);
+    attendanceSheet.setColumnWidths(1, 5, 150);
+
+    const passwordSheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet(passwordTabName);
+    passwordSheet.getRange(1, 1).setValue('Current password');
+    passwordSheet.getRange(2, 1).setValue('1');
+    passwordSheet.setColumnWidth(1, 150);
+  } else {
+    SpreadsheetApp.getUi().alert('The spreadsheet system has already been initialized');
+  }
+}
+
+function resetData() {
+  const ui = SpreadsheetApp.getUi();
+  const response = ui.alert('This will erase all data in the main tab and attendance log.', 'Are you sure?', ui.ButtonSet.YES_NO);
+  if (response === ui.Button.YES) {
+    const mainSheet = getSheet(mainTabName);
+    const attendanceSheet = getSheet(attendanceLogSheetName);
+    const passwordSheet = getSheet(passwordTabName);
+
+    // Clear main tab data
+    if (mainSheet) {
+      mainSheet.clear();
+      mainSheet.getRange(1, 1, 1, 6).setValues([['UID', 'Name', 'Access', 'Text To Display', 'Visits Count', 'Last Visit']]);
+      mainSheet.getRange(2, 1, 2, 6).setValues([
+        ['33668dfc', 'manager', 'allow', 'Come in!', 0, ''],
+        ['6a519389', 'staff', 'allow', 'Come in!', 0, '']
+      ]);
+      mainSheet.setColumnWidths(1, 6, 150);
+    }
+
+    // Clear attendance log data
+    if (attendanceSheet) {
+      attendanceSheet.clear();
+      attendanceSheet.getRange(1, 1, 1, 5).setValues([['Date Time', 'UID', 'Name', 'Result', 'Terminal']]);
+      attendanceSheet.setColumnWidths(1, 5, 150);
+    }
+
+    // Clear password tab data
+    if (passwordSheet) {
+      passwordSheet.clear();
+      passwordSheet.getRange(1, 1).setValue('Current password');
+      passwordSheet.getRange(2, 1).setValue('1');
+      passwordSheet.setColumnWidth(1, 150);
+    }
+
+    ui.alert('Data has been reset.');
+  }
+}
+
+function doGet(e) {
+  const params = e.parameter;
+  if (!params || !params.uid) return ContentService.createTextOutput("Invalid Request");
+
+  const uid = stripQuotes(params.uid);
+  const terminal = params.terminal ? stripQuotes(params.terminal) : defaultTerminalName;
+  const dateTime = Utilities.formatDate(new Date(), timeZone, dateTimeFormat);
+
+  const mainSheet = getSheet(mainTabName);
+  const passwordSheet = getSheet(passwordTabName);
+  const data = mainSheet.getDataRange().getValues();
+  let access = "deny";
+  let text = 'error card';
+  let name = 'Who are you?';
+  let currentPassword = '';
+
+  for (let i = 0; i < data.length; i++) {
+    if (data[i][0] === uid) {
+      name = data[i][1];
+      access = data[i][2];
+      text = data[i][3];
+      mainSheet.getRange(i + 1, 5).setValue(data[i][4] + 1);
+      mainSheet.getRange(i + 1, 6).setValue(dateTime + ' ' + terminal);
+      break;
+    }
+  }
+
+  currentPassword = passwordSheet.getRange(2, 1).getValue();
+
+  getSheet(attendanceLogSheetName).appendRow([dateTime, uid, name, access, terminal]);
+  return ContentService.createTextOutput(`${access}:${name}:${text}:${currentPassword}`);
+}
+
+function getSheet(sheetName) {
+  return SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName);
+}
+
+function stripQuotes(value) {
+  return value.replace(/^["']|['"]$/g, "");
+}
+
